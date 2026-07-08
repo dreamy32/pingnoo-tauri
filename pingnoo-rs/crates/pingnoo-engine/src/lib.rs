@@ -1,22 +1,23 @@
-//! `pingnoo-net` — async traceroute/ping engine(s).
+//! `pingnoo-engine` — async traceroute/ping engine(s).
 //!
-//! Tonight's engine wraps [`trippy_core`], which owns the raw-socket ICMP
-//! machinery, reply correlation and cross-platform privilege handling. We drive
-//! it as **bounded single-round sweeps in a loop we control** so that:
+//! Engine per platform, behind one [`run_trace`] driver:
 //!
-//! * stopping is genuinely clean — cancellation is checked between rounds and no
-//!   trace thread is ever orphaned (each round self-terminates), and
-//! * our own [`StatsAccumulator`] (the Rust port of `PingData`) is the single
-//!   source of truth for the render-ready per-hop stats.
+//! * **Unix/macOS** wrap [`trippy_core`] (raw-socket ICMP + reply correlation +
+//!   privilege handling), driven as bounded single-round sweeps in a loop we
+//!   control so cancellation is clean and no trace thread is ever orphaned.
+//! * **Windows** use the IP Helper API (`IcmpCreateFile` + `IcmpSendEcho` with a
+//!   per-TTL TTL option) — **no Administrator required**, mirroring the legacy
+//!   `ICMPAPIPingEngine`.
 //!
-//! Each round is a full TTL sweep (one sample per hop). Trippy's blocking
-//! `run()` executes on a `spawn_blocking` thread so the tokio runtime — and the
-//! UI it drives — is never blocked.
+//! Either way our own [`StatsAccumulator`] (the port of `PingData`) is the
+//! single source of truth for the render-ready per-hop stats, and the blocking
+//! probe work runs on `spawn_blocking` so the tokio runtime — and the UI it
+//! drives — is never blocked.
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use pingnoo_core::{
@@ -24,13 +25,23 @@ use pingnoo_core::{
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+#[cfg(not(windows))]
 use trippy_core::{Builder, PrivilegeMode, Protocol};
+#[cfg(not(windows))]
 use trippy_privilege::Privilege;
 
-/// Stable identifier for the trippy-backed engine.
-pub const TRIPPY_ENGINE_ID: &str = "trippy-icmp";
+#[cfg(windows)]
+mod win_icmp;
 
-/// Describes the trippy engine and whether it can run on this host right now.
+/// Stable identifier for the active engine.
+#[cfg(not(windows))]
+pub const ENGINE_ID: &str = "trippy-icmp";
+#[cfg(windows)]
+pub const ENGINE_ID: &str = "win-icmp";
+
+/// Describes the engine and whether it can run on this host right now.
+#[cfg(not(windows))]
 pub fn engine_info() -> EngineInfo {
     let (available, note) = match Privilege::discover() {
         Ok(p) if p.has_privileges() => (true, "raw socket (privileged)"),
@@ -39,14 +50,26 @@ pub fn engine_info() -> EngineInfo {
         Err(_) => (true, "privilege state unknown"),
     };
     EngineInfo {
-        id: TRIPPY_ENGINE_ID.to_string(),
+        id: ENGINE_ID.to_string(),
         description: format!("ICMP traceroute via trippy — {note}"),
         priority: 100,
         available,
     }
 }
 
-/// Chooses the best privilege mode for the current platform.
+/// Windows engine — never needs elevation.
+#[cfg(windows)]
+pub fn engine_info() -> EngineInfo {
+    EngineInfo {
+        id: ENGINE_ID.to_string(),
+        description: "ICMP echo via Windows IP Helper (IcmpSendEcho) — no administrator required"
+            .to_string(),
+        priority: 100,
+        available: true,
+    }
+}
+
+#[cfg(not(windows))]
 fn pick_privilege_mode() -> PrivilegeMode {
     match Privilege::discover() {
         Ok(p) if p.has_privileges() => PrivilegeMode::Privileged,
@@ -93,43 +116,73 @@ struct HopState {
     last_ms: Option<f64>,
 }
 
-/// One hop's outcome within a single completed round (owned, no State borrow).
-struct RoundHop {
-    ttl: u8,
-    addr: Option<IpAddr>,
-    rtt_ms: Option<f64>,
+/// One hop's outcome within a single completed round (owned, no engine borrow).
+pub(crate) struct RoundHop {
+    pub(crate) ttl: u8,
+    pub(crate) addr: Option<IpAddr>,
+    pub(crate) rtt_ms: Option<f64>,
 }
 
+/// Whether the platform's round fn already blocks for ~the interval (trippy) or
+/// returns as fast as it can and needs the driver to pace it (Windows sweep).
+#[cfg(not(windows))]
+const ROUND_SELF_PACED: bool = true;
+#[cfg(windows)]
+const ROUND_SELF_PACED: bool = false;
+
 /// Runs a continuous trace until `cancel` fires, emitting one [`TraceUpdate`]
-/// snapshot per round into `tx`. Returns `Ok(())` on clean cancellation or when
-/// the receiver is dropped.
+/// snapshot per round into `tx`. On any failure it emits a final snapshot whose
+/// `error` is set (so the UI can show a banner) and returns `Err`.
 pub async fn run_trace(
     session_id: u64,
     config: TraceConfig,
     tx: mpsc::Sender<TraceUpdate>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
-    let target = resolve_target(&config.target, config.ip_version).await?;
+    let target = match resolve_target(&config.target, config.ip_version).await {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = tx
+                .send(error_update(session_id, 0, &config, None, format!("{e:#}")))
+                .await;
+            return Err(e);
+        }
+    };
+
+    #[cfg(not(windows))]
     let privilege_mode = pick_privilege_mode();
     let interval = Duration::from_millis(config.interval_ms.max(100) as u64);
+    #[cfg(windows)]
+    let timeout = Duration::from_millis(config.timeout_ms.clamp(100, 60_000) as u64);
     let max_ttl = config.max_hops.clamp(1, 255) as u8;
 
     let mut hops: BTreeMap<u8, HopState> = BTreeMap::new();
     let mut seq: u64 = 0;
 
     while !cancel.is_cancelled() {
-        // One bounded sweep on a blocking thread — never blocks the runtime.
-        let round = tokio::task::spawn_blocking(move || {
-            run_one_round(target, privilege_mode, max_ttl, interval)
-        })
-        .await
-        .context("trace round task panicked")?;
+        let round_start = Instant::now();
 
-        let round = match round {
+        // One bounded sweep on a blocking thread — never blocks the runtime.
+        let join = {
+            #[cfg(windows)]
+            {
+                let (t, to) = (target, timeout);
+                tokio::task::spawn_blocking(move || win_icmp::run_one_round_win(t, max_ttl, to))
+                    .await
+            }
+            #[cfg(not(windows))]
+            {
+                let (t, pm, iv) = (target, privilege_mode, interval);
+                tokio::task::spawn_blocking(move || run_one_round(t, pm, max_ttl, iv)).await
+            }
+        };
+
+        let round = match join.context("trace round task panicked")? {
             Ok(r) => r,
             Err(e) => {
-                // Surface the failure to the UI as an empty snapshot, then stop.
-                let _ = tx.send(error_update(session_id, seq, &config, target)).await;
+                let _ = tx
+                    .send(error_update(session_id, seq, &config, Some(target), format!("{e:#}")))
+                    .await;
                 return Err(e);
             }
         };
@@ -163,15 +216,26 @@ pub async fn run_trace(
             .values()
             .any(|h| h.last_addr == Some(target) && matches!(h.last_code, Some(ResultCode::Ok)));
         let update = build_update(session_id, seq, &config, target, &hops, completed);
-
         if tx.send(update).await.is_err() {
             break; // receiver dropped
+        }
+
+        // Pace to the interval when the round fn does not do so itself.
+        if !ROUND_SELF_PACED {
+            let elapsed = round_start.elapsed();
+            if elapsed < interval {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = tokio::time::sleep(interval - elapsed) => {}
+                }
+            }
         }
     }
     Ok(())
 }
 
 /// Builds and runs a single trippy round, returning per-hop results. Blocking.
+#[cfg(not(windows))]
 fn run_one_round(
     target: IpAddr,
     privilege_mode: PrivilegeMode,
@@ -242,21 +306,29 @@ fn build_update(
         max_hops: config.max_hops,
         completed,
         interval_ms: config.interval_ms,
+        error: None,
     }
 }
 
-fn error_update(session_id: u64, seq: u64, config: &TraceConfig, target: IpAddr) -> TraceUpdate {
+fn error_update(
+    session_id: u64,
+    seq: u64,
+    config: &TraceConfig,
+    resolved: Option<IpAddr>,
+    msg: String,
+) -> TraceUpdate {
     TraceUpdate {
         session_id,
         seq,
         target: config.target.clone(),
-        resolved_addr: Some(target.to_string()),
+        resolved_addr: resolved.map(|a| a.to_string()),
         ip_version: config.ip_version,
         hops: Vec::new(),
         total_hops: 0,
         max_hops: config.max_hops,
         completed: false,
         interval_ms: config.interval_ms,
+        error: Some(msg),
     }
 }
 
@@ -273,7 +345,7 @@ mod tests {
     #[test]
     fn engine_info_is_populated() {
         let info = engine_info();
-        assert_eq!(info.id, TRIPPY_ENGINE_ID);
+        assert_eq!(info.id, ENGINE_ID);
         assert!(!info.description.is_empty());
     }
 }

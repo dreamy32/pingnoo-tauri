@@ -35,6 +35,7 @@ export interface TraceUpdate {
   maxHops: number;
   completed: boolean;
   intervalMs: number;
+  error: string | null;
 }
 
 export interface EngineInfo {

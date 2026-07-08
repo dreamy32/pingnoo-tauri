@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 pingnoo-core = { workspace = true }
-pingnoo-net = { workspace = true }
+pingnoo-engine = { workspace = true }
 tauri = { version = "2", features = [] }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

@@ -48,7 +48,7 @@ fn default_max_hops() -> u16 {
 /// Lists the ping engines and whether each is usable on this host right now.
 #[tauri::command]
 fn list_engines() -> Vec<EngineInfo> {
-    vec![pingnoo_net::engine_info()]
+    vec![pingnoo_engine::engine_info()]
 }
 
 /// Starts a trace session, streaming [`TraceUpdate`] snapshots over `channel`.
@@ -93,7 +93,7 @@ async fn start_session(
     // Engine task; removes itself from the registry when it ends.
     let active = sessions.active.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = pingnoo_net::run_trace(id, config, tx, cancel).await {
+        if let Err(e) = pingnoo_engine::run_trace(id, config, tx, cancel).await {
             tracing::warn!(session = id, error = %format!("{e:#}"), "trace ended with error");
         }
         active.lock().unwrap().remove(&id);

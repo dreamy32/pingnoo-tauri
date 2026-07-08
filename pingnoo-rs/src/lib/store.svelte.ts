@@ -101,6 +101,7 @@ class TraceStore {
   async start() {
     if (this.running) return;
     this.#reset();
+    this.error = null;
     this.running = true;
 
     const channel = new Channel<TraceUpdate>();
@@ -171,6 +172,12 @@ class TraceStore {
   };
 
   #apply(u: TraceUpdate) {
+    // Engine failure: surface it and stop, rather than showing an empty table.
+    if (u.error) {
+      this.error = u.error;
+      void this.stop();
+      return;
+    }
     // 1) reactive table + status (Svelte updates only changed cells).
     this.hops = u.hops.map(toRow);
     this.resolved = u.resolvedAddr;

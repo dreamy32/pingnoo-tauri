@@ -1,0 +1,30 @@
+[package]
+name = "pingnoo-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Async traceroute/ping engine for Pingnoo (trippy on Unix, IP Helper API on Windows)."
+
+[dependencies]
+pingnoo-core = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Unix/macOS: trippy owns the raw-socket ICMP + privilege handling.
+[target.'cfg(not(windows))'.dependencies]
+trippy-core = "0.13"
+trippy-privilege = "0.13"
+
+# Windows: use the IP Helper API (IcmpSendEcho) which needs no elevation.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+] }
+
+[[bin]]
+name = "trace-demo"
+path = "src/bin/trace_demo.rs"

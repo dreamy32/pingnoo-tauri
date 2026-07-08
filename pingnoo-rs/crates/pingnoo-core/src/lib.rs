@@ -160,6 +160,9 @@ pub struct TraceUpdate {
     /// True once the destination has replied (route fully discovered).
     pub completed: bool,
     pub interval_ms: u32,
+    /// Set when the engine failed; the UI shows this and stops.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// Configuration for a trace session. Ported from `IPingEngine`
@@ -310,6 +313,7 @@ mod tests {
                 max_hops: 64,
                 completed: false,
                 interval_ms: 1000,
+                error: None,
             });
         }
         assert_eq!(seen, 42);

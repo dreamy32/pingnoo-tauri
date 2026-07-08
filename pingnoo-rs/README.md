@@ -22,7 +22,7 @@ DNS, and whole-model table invalidation per sample. This rewrite makes
 
 ```
 crates/pingnoo-core   pure types + wire contract + stats accumulator (PingData port), unit-tested
-crates/pingnoo-net    async engine — trippy-core driven, bounded-round loop, clean cancellation
+crates/pingnoo-engine async engine — trippy on Unix, IP Helper API on Windows; bounded rounds, clean cancel
                       └ bin/trace-demo  headless soak harness (real ICMP, no GUI)
 src-tauri             Tauri shell: start/stop/list_engines commands + coalescing forwarder
 src/                  Svelte 5 frontend: ControlBar, HopTable, uPlot LatencyChart
@@ -50,7 +50,7 @@ macOS uses the unprivileged ICMP datagram socket (no root needed).
 ### Headless engine check (no GUI)
 
 ```bash
-cargo run -p pingnoo-net --bin trace-demo -- 1.1.1.1 5 1000
+cargo run -p pingnoo-engine --bin trace-demo -- 1.1.1.1 5 1000
 cargo test --workspace
 ```
 

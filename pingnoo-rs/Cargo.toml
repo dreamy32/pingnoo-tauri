@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pingnoo-core", "crates/pingnoo-net", "src-tauri"]
+members = ["crates/pingnoo-core", "crates/pingnoo-engine", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,7 +19,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "2"
 pingnoo-core = { path = "crates/pingnoo-core" }
-pingnoo-net = { path = "crates/pingnoo-net" }
+pingnoo-engine = { path = "crates/pingnoo-engine" }
 
 # Keep debug builds responsive; the engine is latency-sensitive.
 [profile.dev]
