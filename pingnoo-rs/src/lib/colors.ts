@@ -1,11 +1,13 @@
-// Shared visual encodings: latency thresholds and per-hop series colours.
+// Shared visual encodings: latency thresholds (driven by user settings) and
+// per-hop series colours.
 
-/** CSS class for a latency cell, coloured by threshold. */
+import { settings } from "./settings.svelte";
+
+/** CSS class for a latency cell, coloured by the configured thresholds. */
 export function latencyClass(ms: number | null | undefined): string {
   if (ms == null) return "lat-none";
-  if (ms < 40) return "lat-good";
-  if (ms < 100) return "lat-ok";
-  if (ms < 200) return "lat-warn";
+  if (ms < settings.warnMs) return "lat-good";
+  if (ms < settings.critMs) return "lat-warn";
   return "lat-bad";
 }
 

@@ -1,15 +1,14 @@
-// The streaming store — the heart of the "never freezes" design.
+// One trace session = one tab. Encapsulates its own Channel, ring buffers, rAF
+// render loop and reactive view state, so multiple targets run concurrently and
+// independently (the legacy EditorManager model).
 //
-// The Channel `onmessage` handler is O(1): it only stashes the newest snapshot
-// in a plain (non-reactive) variable. A single requestAnimationFrame loop,
-// decoupled from message arrival, is the *only* thing that touches reactive
-// state and the chart — so a fast producer can never stall paint, and the chart
-// history is bounded (no unbounded-growth leak like the legacy app).
+// The hot path is unchanged from the single-session prototype: Channel.onmessage
+// is O(1) (stash latest), and a decoupled rAF loop is the only thing that
+// touches reactive state or the chart — so nothing ever freezes.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { EngineInfo, Hop, IpVersion, TraceUpdate } from "./types";
+import type { Hop, IpVersion, TraceUpdate } from "./types";
 
-/** Points kept per hop for the live chart (rolling window). */
 const RING = 600;
 
 export interface HopRow {
@@ -42,46 +41,33 @@ function toRow(h: Hop): HopRow {
   };
 }
 
-class TraceStore {
-  // ---- reactive view state (read by components) --------------------------
-  running = $state(false);
-  target = $state("1.1.1.1");
+export class Session {
+  readonly id: number;
+  target = $state("");
+  ipVersion = $state<IpVersion>("v4");
   intervalMs = $state(1000);
+
+  running = $state(false);
   resolved = $state<string | null>(null);
   completed = $state(false);
   error = $state<string | null>(null);
-  engine = $state<EngineInfo | null>(null);
   rounds = $state(0);
   hops = $state<HopRow[]>([]);
-  /** Bumped whenever the chart buffers change; the chart reacts to this. */
   chartVersion = $state(0);
-  /** ttl values the user has hidden on the chart. */
   hidden = $state<Set<number>>(new Set());
 
-  // ---- hot-path buffers (NOT reactive) -----------------------------------
-  #latest: TraceUpdate | null = null;
   #renderedSeq = -1;
   #xs: number[] = [];
-  #series = new Map<number, number[]>(); // ttl -> y values aligned to #xs
+  #series = new Map<number, number[]>();
   #sessionId: number | null = null;
-  #channel: Channel<TraceUpdate> | null = null;
-  #raf = 0;
 
-  async init() {
-    try {
-      const engines = await invoke<EngineInfo[]>("list_engines");
-      this.engine = engines[0] ?? null;
-      if (this.engine && !this.engine.available) {
-        this.error =
-          "The ICMP engine needs raw-socket privileges on this machine. " +
-          "On Linux: setcap cap_net_raw+ep on the binary, or run via sudo.";
-      }
-    } catch (e) {
-      this.error = `Could not query engines: ${e}`;
-    }
+  constructor(id: number, target: string, ipVersion: IpVersion, intervalMs: number) {
+    this.id = id;
+    this.target = target;
+    this.ipVersion = ipVersion;
+    this.intervalMs = intervalMs;
   }
 
-  /** x/y data for the chart, in ttl order, honouring hidden series. */
   chartData(): { xs: number[]; series: { ttl: number; ys: number[] }[] } {
     const series = [...this.#series.entries()]
       .filter(([ttl]) => !this.hidden.has(ttl))
@@ -105,24 +91,26 @@ class TraceStore {
     this.running = true;
 
     const channel = new Channel<TraceUpdate>();
-    // O(1) hot path: just stash the latest snapshot.
+    // Apply on arrival. The backend coalesces to ~60Hz and the real rate is
+    // ~1/s, so this is cheap and — unlike a requestAnimationFrame loop — keeps
+    // updating even when the window is backgrounded (rAF pauses when hidden).
     channel.onmessage = (msg) => {
-      this.#latest = msg;
+      if (msg.seq !== this.#renderedSeq) {
+        this.#renderedSeq = msg.seq;
+        this.#apply(msg);
+      }
     };
-    this.#channel = channel;
 
     try {
       this.#sessionId = await invoke<number>("start_session", {
         args: {
           host: this.target.trim(),
-          ipVersion: "v4" as IpVersion,
+          ipVersion: this.ipVersion,
           intervalMs: this.intervalMs,
           maxHops: 30,
         },
         channel,
       });
-      this.error = null;
-      this.#loop();
     } catch (e) {
       this.running = false;
       this.error = `${e}`;
@@ -132,11 +120,8 @@ class TraceStore {
   async stop() {
     if (!this.running) return;
     this.running = false;
-    cancelAnimationFrame(this.#raf);
-    this.#raf = 0;
     const id = this.#sessionId;
     this.#sessionId = null;
-    this.#channel = null;
     if (id !== null) {
       try {
         await invoke("stop_session", { id });
@@ -146,8 +131,11 @@ class TraceStore {
     }
   }
 
+  async dispose() {
+    await this.stop();
+  }
+
   #reset() {
-    this.#latest = null;
     this.#renderedSeq = -1;
     this.#xs = [];
     this.#series.clear();
@@ -159,32 +147,17 @@ class TraceStore {
     this.chartVersion++;
   }
 
-  // The single render loop: decoupled from data arrival.
-  #loop = () => {
-    const u = this.#latest;
-    if (u && u.seq !== this.#renderedSeq) {
-      this.#renderedSeq = u.seq;
-      this.#apply(u);
-    }
-    if (this.running) {
-      this.#raf = requestAnimationFrame(this.#loop);
-    }
-  };
-
   #apply(u: TraceUpdate) {
-    // Engine failure: surface it and stop, rather than showing an empty table.
     if (u.error) {
       this.error = u.error;
       void this.stop();
       return;
     }
-    // 1) reactive table + status (Svelte updates only changed cells).
     this.hops = u.hops.map(toRow);
     this.resolved = u.resolvedAddr;
     this.completed = u.completed;
     this.rounds = u.seq;
 
-    // 2) append one aligned column to the rolling chart buffers.
     const x = u.seq;
     this.#xs.push(x);
     const seen = new Set<number>();
@@ -192,17 +165,14 @@ class TraceStore {
       seen.add(h.ttl);
       let ys = this.#series.get(h.ttl);
       if (!ys) {
-        // backfill NaNs so every series is aligned to #xs.
         ys = new Array(this.#xs.length - 1).fill(NaN);
         this.#series.set(h.ttl, ys);
       }
       ys.push(h.currentMs ?? NaN);
     }
-    // hops that vanished this round still need an aligned NaN.
     for (const [ttl, ys] of this.#series) {
       if (!seen.has(ttl)) ys.push(NaN);
     }
-    // trim to the rolling window.
     if (this.#xs.length > RING) {
       const drop = this.#xs.length - RING;
       this.#xs.splice(0, drop);
@@ -211,5 +181,3 @@ class TraceStore {
     this.chartVersion++;
   }
 }
-
-export const store = new TraceStore();

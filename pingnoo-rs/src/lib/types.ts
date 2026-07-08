@@ -44,3 +44,19 @@ export interface EngineInfo {
   priority: number;
   available: boolean;
 }
+
+/** A saved target (favourite / recent). */
+export interface Favourite {
+  host: string;
+  name: string;
+  ipVersion: IpVersion;
+  intervalMs: number;
+}
+
+/** Geolocation for a hop IP (from an online lookup). */
+export interface GeoInfo {
+  country: string | null;
+  countryCode: string | null;
+  city: string | null;
+  isp: string | null;
+}

@@ -1,6 +1,26 @@
 <script lang="ts">
-  import { store } from "../store.svelte";
+  import { app } from "../app.svelte";
+  import { mask } from "../masking";
+  import { flag } from "../geoip";
   import { latencyClass, hopColor, fmtMs } from "../colors";
+  import type { Session } from "../session.svelte";
+
+  let { session }: { session: Session } = $props();
+
+  // Trigger GeoIP lookups for any hop addresses we haven't seen yet.
+  $effect(() => {
+    for (const h of session.hops) {
+      if (h.addr) app.ensureGeo(h.addr);
+    }
+  });
+
+  function location(addr: string | null): string {
+    if (!addr) return "";
+    const g = app.geo[addr];
+    if (!g) return "";
+    const parts = [g.city, g.country].filter(Boolean);
+    return `${flag(g.countryCode)} ${parts.join(", ")}`.trim();
+  }
 </script>
 
 <div class="wrap">
@@ -9,6 +29,7 @@
       <tr>
         <th class="c-ttl">#</th>
         <th class="c-host">Host</th>
+        <th class="c-loc">Location</th>
         <th class="num">Loss</th>
         <th class="num">Sent</th>
         <th class="num">Last</th>
@@ -19,19 +40,20 @@
       </tr>
     </thead>
     <tbody>
-      {#each store.hops as hop (hop.ttl)}
-        {@const hidden = store.hidden.has(hop.ttl)}
-        <tr class:hidden onclick={() => store.toggleHop(hop.ttl)} title="click to toggle on chart">
+      {#each session.hops as hop (hop.ttl)}
+        {@const hidden = session.hidden.has(hop.ttl)}
+        <tr class:hidden onclick={() => session.toggleHop(hop.ttl)} title="click to toggle on chart">
           <td class="c-ttl">
             <span class="swatch" style="background:{hopColor(hop.ttl)}"></span>{hop.ttl}
           </td>
           <td class="c-host">
             {#if hop.addr}
-              <span class="addr">{hop.host ?? hop.addr}</span>
+              <span class="addr">{mask(hop.host ?? hop.addr)}</span>
             {:else}
               <span class="waiting">waiting…</span>
             {/if}
           </td>
+          <td class="c-loc">{location(hop.addr)}</td>
           <td class="num" class:loss={hop.lossPct > 0}>{hop.lossPct.toFixed(0)}%</td>
           <td class="num dim">{hop.sent}</td>
           <td class="num {latencyClass(hop.currentMs)}">{fmtMs(hop.currentMs)}</td>
@@ -42,8 +64,8 @@
         </tr>
       {:else}
         <tr class="empty">
-          <td colspan="9">
-            {store.running ? "discovering route…" : "enter a host and press Start"}
+          <td colspan="10">
+            {session.running ? "discovering route…" : "press Start to begin"}
           </td>
         </tr>
       {/each}
@@ -74,9 +96,11 @@
     color: var(--muted);
     background: var(--surface);
     border-bottom: 1px solid var(--border);
+    white-space: nowrap;
   }
   th.c-ttl,
-  th.c-host {
+  th.c-host,
+  th.c-loc {
     text-align: left;
   }
   tbody td {
@@ -84,6 +108,7 @@
     border-bottom: 1px solid var(--border-faint);
     text-align: right;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
   tbody tr {
     cursor: pointer;
@@ -97,7 +122,6 @@
   .c-ttl {
     text-align: left;
     color: var(--muted);
-    white-space: nowrap;
   }
   .swatch {
     display: inline-block;
@@ -111,6 +135,11 @@
     text-align: left;
     font-family: var(--mono);
     color: var(--text);
+  }
+  .c-loc {
+    text-align: left;
+    color: var(--muted);
+    font-size: 12px;
   }
   .waiting {
     color: var(--muted);
@@ -129,13 +158,8 @@
     padding: 28px;
     font-style: italic;
   }
-
-  /* latency threshold tints */
   .lat-good {
     color: var(--good);
-  }
-  .lat-ok {
-    color: var(--text);
   }
   .lat-warn {
     color: var(--warn);

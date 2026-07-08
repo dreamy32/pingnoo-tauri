@@ -2,8 +2,10 @@
   import { onMount, onDestroy } from "svelte";
   import uPlot from "uplot";
   import "uplot/dist/uPlot.min.css";
-  import { store } from "../store.svelte";
   import { hopColor } from "../colors";
+  import type { Session } from "../session.svelte";
+
+  let { session }: { session: Session } = $props();
 
   let el: HTMLDivElement;
   let chart: uPlot | null = null;
@@ -27,7 +29,7 @@
     ];
     const opts: uPlot.Options = {
       width: el.clientWidth || 600,
-      height: el.clientHeight || 260,
+      height: el.clientHeight || 240,
       legend: { show: false },
       cursor: { y: false, points: { show: true } },
       scales: { x: { time: false } },
@@ -51,7 +53,7 @@
   }
 
   function render() {
-    const { xs, series } = store.chartData();
+    const { xs, series } = session.chartData();
     const ttls = series.map((s) => s.ttl);
     const key = ttls.join(",");
     if (!chart || key !== seriesKey) {
@@ -79,9 +81,9 @@
     chart?.destroy();
   });
 
-  // The only reactive trigger: the store bumps chartVersion in its rAF loop.
+  // Reactive trigger: the session bumps chartVersion in its rAF loop.
   $effect(() => {
-    store.chartVersion;
+    session.chartVersion;
     if (el) render();
   });
 </script>
@@ -92,9 +94,8 @@
   .chart {
     width: 100%;
     height: 100%;
-    min-height: 200px;
+    min-height: 180px;
   }
-  /* uPlot draws to canvas; keep its DOM chrome themed. */
   :global(.uplot .u-axis) {
     color: var(--muted);
   }

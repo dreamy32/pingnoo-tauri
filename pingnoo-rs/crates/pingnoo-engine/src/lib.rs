@@ -14,9 +14,10 @@
 //! probe work runs on `spawn_blocking` so the tokio runtime — and the UI it
 //! drives — is never blocked.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
@@ -159,6 +160,11 @@ pub async fn run_trace(
     let mut hops: BTreeMap<u8, HopState> = BTreeMap::new();
     let mut seq: u64 = 0;
 
+    // Reverse-DNS runs in the background; names appear a round or two after a
+    // hop's address is first seen and never block the sample loop.
+    let dns_cache: Arc<Mutex<HashMap<IpAddr, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    let dns_inflight: Arc<Mutex<HashSet<IpAddr>>> = Arc::new(Mutex::new(HashSet::new()));
+
     while !cancel.is_cancelled() {
         let round_start = Instant::now();
 
@@ -211,11 +217,31 @@ pub async fn run_trace(
             }
         }
 
+        // Kick off reverse-DNS for any newly-seen addresses (non-blocking).
+        for ip in hops.values().filter_map(|h| h.last_addr) {
+            let already = dns_cache.lock().unwrap().contains_key(&ip);
+            let mut inflight = dns_inflight.lock().unwrap();
+            if !already && !inflight.contains(&ip) {
+                inflight.insert(ip);
+                let cache = dns_cache.clone();
+                let inflight_handle = dns_inflight.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Ok(name) = dns_lookup::lookup_addr(&ip) {
+                        if name != ip.to_string() {
+                            cache.lock().unwrap().insert(ip, name);
+                        }
+                    }
+                    inflight_handle.lock().unwrap().remove(&ip);
+                });
+            }
+        }
+
         seq += 1;
         let completed = hops
             .values()
             .any(|h| h.last_addr == Some(target) && matches!(h.last_code, Some(ResultCode::Ok)));
-        let update = build_update(session_id, seq, &config, target, &hops, completed);
+        let names = dns_cache.lock().unwrap().clone();
+        let update = build_update(session_id, seq, &config, target, &hops, completed, &names);
         if tx.send(update).await.is_err() {
             break; // receiver dropped
         }
@@ -277,6 +303,7 @@ fn build_update(
     target: IpAddr,
     hops: &BTreeMap<u8, HopState>,
     completed: bool,
+    names: &HashMap<IpAddr, String>,
 ) -> TraceUpdate {
     let out_hops: Vec<Hop> = hops
         .iter()
@@ -286,7 +313,7 @@ fn build_update(
                 ttl,
                 sample_number: stats.sent,
                 addr: st.last_addr.map(|a| a.to_string()),
-                host: None, // reverse DNS deferred (Phase 1)
+                host: st.last_addr.and_then(|a| names.get(&a).cloned()),
                 code: st.last_code.unwrap_or(ResultCode::NoReply),
                 current_ms: st.last_ms,
                 stats,

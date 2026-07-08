@@ -12,6 +12,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
+dns-lookup = "2"
 
 # Unix/macOS: trippy owns the raw-socket ICMP + privilege handling.
 [target.'cfg(not(windows))'.dependencies]

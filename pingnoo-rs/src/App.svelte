@@ -1,70 +1,114 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { store } from "./lib/store.svelte";
-  import ControlBar from "./lib/components/ControlBar.svelte";
-  import HopTable from "./lib/components/HopTable.svelte";
-  import LatencyChart from "./lib/components/LatencyChart.svelte";
+  import { app } from "./lib/app.svelte";
+  import { settings } from "./lib/settings.svelte";
+  import TabStrip from "./lib/components/TabStrip.svelte";
+  import SessionView from "./lib/components/SessionView.svelte";
+  import SettingsModal from "./lib/components/SettingsModal.svelte";
 
-  let theme = $state<"dark" | "light">("dark");
+  // Load persisted settings synchronously, before the persist effect runs, so
+  // it never clobbers saved values with defaults.
+  settings.load();
 
-  function applyTheme() {
-    document.documentElement.dataset.theme = theme;
-  }
-  function toggleTheme() {
-    theme = theme === "dark" ? "light" : "dark";
-    localStorage.setItem("pingnoo-theme", theme);
-    applyTheme();
-  }
-
-  onMount(() => {
-    const saved = localStorage.getItem("pingnoo-theme") as "dark" | "light" | null;
-    if (saved) theme = saved;
-    else if (window.matchMedia("(prefers-color-scheme: light)").matches) theme = "light";
-    applyTheme();
-    store.init();
+  onMount(async () => {
+    await app.init();
+    if (app.sessions.length === 0) {
+      app.newSession("1.1.1.1", settings.defaultIpVersion, settings.defaultIntervalMs, false);
+    }
   });
+
+  // Apply + persist theme/settings reactively.
+  $effect(() => {
+    document.documentElement.dataset.theme = settings.theme;
+  });
+  $effect(() => {
+    settings.serialize(); // touch all fields for dependency tracking
+    settings.persist();
+  });
+
+  function toggleTheme() {
+    settings.theme = settings.theme === "dark" ? "light" : "dark";
+  }
 </script>
 
 <main>
   <header>
-    <ControlBar />
-    <button class="theme" onclick={toggleTheme} title="toggle theme" aria-label="toggle theme">
-      {theme === "dark" ? "☾" : "☀"}
-    </button>
+    <div class="brand">
+      <span class="logo">◎</span>
+      <span class="name">Pingnoo</span>
+      {#if app.engine && !app.engine.available}
+        <span class="warn-note" title={app.engine.description}>⚠ engine needs privileges</span>
+      {/if}
+    </div>
+    <div class="head-actions">
+      <button class="icon" title="settings" onclick={() => (app.showSettings = true)}>⚙</button>
+      <button class="icon" title="toggle theme" onclick={toggleTheme}>
+        {settings.theme === "dark" ? "☾" : "☀"}
+      </button>
+    </div>
   </header>
 
-  {#if store.error}
-    <div class="banner">
-      <strong>⚠</strong>
-      <span>{store.error}</span>
-      <button onclick={() => (store.error = null)} aria-label="dismiss">✕</button>
-    </div>
+  <TabStrip />
+
+  <div class="body">
+    {#if app.active}
+      {#key app.active.id}
+        <SessionView session={app.active} />
+      {/key}
+    {:else}
+      <div class="empty">
+        <div class="empty-inner">
+          <span class="big-logo">◎</span>
+          <p>Add a target above to start analysing a route.</p>
+        </div>
+      </div>
+    {/if}
+  </div>
+
+  {#if app.showSettings}
+    <SettingsModal />
   {/if}
-
-  <section class="table-pane">
-    <HopTable />
-  </section>
-
-  <section class="chart-pane">
-    <div class="pane-title">latency over time <span>(click a hop to toggle)</span></div>
-    <div class="chart-host"><LatencyChart /></div>
-  </section>
 </main>
 
 <style>
   main {
     display: grid;
-    grid-template-rows: auto auto 1.1fr 0.9fr;
+    grid-template-rows: auto auto 1fr;
     height: 100vh;
     overflow: hidden;
   }
   header {
-    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
   }
-  .theme {
-    position: absolute;
-    top: 12px;
-    right: 14px;
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+  }
+  .logo {
+    color: var(--accent);
+    font-size: 20px;
+  }
+  .name {
+    font-size: 16px;
+  }
+  .warn-note {
+    margin-left: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--warn);
+  }
+  .head-actions {
+    display: flex;
+    gap: 6px;
+  }
+  .icon {
     width: 34px;
     height: 34px;
     border-radius: 8px;
@@ -74,49 +118,26 @@
     cursor: pointer;
     font-size: 15px;
   }
-  .banner {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    background: color-mix(in srgb, var(--danger) 14%, var(--surface));
-    border-bottom: 1px solid var(--border);
-    color: var(--text);
-    font-size: 13px;
-  }
-  .banner button {
-    margin-left: auto;
-    background: none;
-    border: none;
-    color: var(--muted);
-    cursor: pointer;
-    font-size: 14px;
-  }
-  .table-pane {
-    overflow: hidden;
-    border-bottom: 1px solid var(--border);
-  }
-  .chart-pane {
+  .body {
     display: flex;
     flex-direction: column;
+    min-height: 0;
     overflow: hidden;
-    background: var(--bg);
   }
-  .pane-title {
-    padding: 8px 16px;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+  .empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1 1 auto;
     color: var(--muted);
   }
-  .pane-title span {
-    text-transform: none;
-    letter-spacing: 0;
-    opacity: 0.7;
+  .empty-inner {
+    text-align: center;
   }
-  .chart-host {
-    flex: 1 1 auto;
-    padding: 4px 12px 12px;
-    min-height: 0;
+  .big-logo {
+    font-size: 48px;
+    color: var(--border);
+    display: block;
+    margin-bottom: 12px;
   }
 </style>
