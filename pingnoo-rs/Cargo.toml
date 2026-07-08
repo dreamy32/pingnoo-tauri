@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/pingnoo-core", "crates/pingnoo-net", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["Pingnoo contributors"]
+repository = "https://github.com/nedrysoft/pingnoo"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+pingnoo-core = { path = "crates/pingnoo-core" }
+pingnoo-net = { path = "crates/pingnoo-net" }
+
+# Keep debug builds responsive; the engine is latency-sensitive.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

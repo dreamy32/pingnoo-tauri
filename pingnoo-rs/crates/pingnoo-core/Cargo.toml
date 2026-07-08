@@ -1,0 +1,9 @@
+[package]
+name = "pingnoo-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure domain types, wire contract and stats for the Pingnoo route analyser."
+
+[dependencies]
+serde = { workspace = true }
