@@ -53,6 +53,9 @@
   }
 
   function render() {
+    // Page Visibility: skip canvas work while hidden (rAF is throttled there
+    // anyway, but this also skips setData); onVisible repaints once on return.
+    if (document.hidden) return;
     const { xs, series } = session.chartData();
     const ttls = series.map((s) => s.ttl);
     const key = ttls.join(",");
@@ -68,15 +71,21 @@
     chart.setData(data);
   }
 
+  function onVisibility() {
+    if (!document.hidden) render();
+  }
+
   onMount(() => {
     build([]);
     ro = new ResizeObserver(() => {
       if (chart) chart.setSize({ width: el.clientWidth, height: el.clientHeight });
     });
     ro.observe(el);
+    document.addEventListener("visibilitychange", onVisibility);
   });
 
   onDestroy(() => {
+    document.removeEventListener("visibilitychange", onVisibility);
     ro?.disconnect();
     chart?.destroy();
   });

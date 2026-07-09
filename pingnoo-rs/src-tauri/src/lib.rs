@@ -8,6 +8,8 @@
 //!   whatever is queued into a single [`TraceUpdate`] before `channel.send()`,
 //!   so a fast producer can never block the webview and paint is never stalled.
 
+mod power;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -121,6 +123,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(Sessions::default())
+        .on_window_event(power::handle_window_event)
         .invoke_handler(tauri::generate_handler![
             list_engines,
             start_session,

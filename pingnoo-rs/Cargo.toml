@@ -27,3 +27,12 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Production: small, fast binary. lto+codegen-units=1 enable cross-crate
+# inlining; strip drops symbols; panic=abort removes unwinding machinery.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+opt-level = 3

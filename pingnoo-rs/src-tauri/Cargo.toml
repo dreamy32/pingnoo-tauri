@@ -23,3 +23,9 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+
+# Windows: suspend the WebView2 renderer when minimized (versions match the
+# webview2-com that tauri/wry already pull in, so the COM types line up).
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
