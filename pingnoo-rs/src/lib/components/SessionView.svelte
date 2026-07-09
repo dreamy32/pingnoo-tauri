@@ -110,7 +110,21 @@
 <div class="panes">
   <section class="table-pane"><HopTable {session} /></section>
   <section class="chart-pane">
-    <div class="pane-title">latency over time <span>(click a hop to toggle)</span></div>
+    <div class="pane-title">
+      <span class="pt-label">latency over time</span>
+      <span class="pt-hint">(hover for details · click a hop row to toggle · red ticks = loss)</span>
+      <label class="pt-window">
+        show
+        <select bind:value={session.windowSecs}>
+          <option value={60}>1 min</option>
+          <option value={300}>5 min</option>
+          <option value={900}>15 min</option>
+          <option value={3600}>1 hour</option>
+          <option value={21600}>6 hours</option>
+          <option value={43200}>12 hours</option>
+        </select>
+      </label>
+    </div>
     <div class="chart-host"><LatencyChart {session} /></div>
   </section>
 </div>
@@ -264,16 +278,35 @@
     min-height: 0;
   }
   .pane-title {
-    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--muted);
   }
-  .pane-title span {
+  .pt-hint {
     text-transform: none;
     letter-spacing: 0;
     opacity: 0.7;
+  }
+  .pt-window {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .pt-window select {
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
   }
   .chart-host {
     flex: 1 1 auto;

@@ -9,7 +9,9 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Hop, IpVersion, TraceUpdate } from "./types";
 
-const RING = 600;
+/// Hard cap on chart history per hop (~14 h at a 1 s interval). The visible
+/// range is chosen by the per-tab window selector; this only bounds memory.
+const MAX_POINTS = 50_000;
 
 export interface HopRow {
   ttl: number;
@@ -55,10 +57,12 @@ export class Session {
   hops = $state<HopRow[]>([]);
   chartVersion = $state(0);
   hidden = $state<Set<number>>(new Set());
+  /// Visible chart window in seconds (the "Viewport duration" selector).
+  windowSecs = $state(300);
 
   #renderedSeq = -1;
-  #xs: number[] = [];
-  #series = new Map<number, number[]>();
+  #xs: number[] = []; // epoch seconds, stamped on arrival
+  #series = new Map<number, (number | null)[]>(); // null = timeout (loss)
   #sessionId: number | null = null;
 
   constructor(id: number, target: string, ipVersion: IpVersion, intervalMs: number) {
@@ -68,12 +72,30 @@ export class Session {
     this.intervalMs = intervalMs;
   }
 
-  chartData(): { xs: number[]; series: { ttl: number; ys: number[] }[] } {
+  /** Chart data restricted to the trailing `windowSecs` of history. */
+  chartData(windowSecs: number): { xs: number[]; series: { ttl: number; ys: (number | null)[] }[] } {
+    const n = this.#xs.length;
+    if (n === 0) return { xs: [], series: [] };
+    // Binary-search the first sample inside the window.
+    const cutoff = this.#xs[n - 1] - windowSecs;
+    let lo = 0;
+    let hi = n - 1;
+    let start = n - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.#xs[mid] >= cutoff) {
+        start = mid;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    const xs = this.#xs.slice(start);
     const series = [...this.#series.entries()]
       .filter(([ttl]) => !this.hidden.has(ttl))
       .sort((a, b) => a[0] - b[0])
-      .map(([ttl, ys]) => ({ ttl, ys }));
-    return { xs: this.#xs, series };
+      .map(([ttl, ys]) => ({ ttl, ys: ys.slice(start) }));
+    return { xs, series };
   }
 
   toggleHop(ttl: number) {
@@ -186,23 +208,25 @@ export class Session {
     this.completed = u.completed;
     this.rounds = u.seq;
 
-    const x = u.seq;
+    // Stamp on arrival: wall-clock x axis. null (not NaN) marks a timeout so
+    // uPlot breaks the line and the loss plugin can paint a marker.
+    const x = Date.now() / 1000;
     this.#xs.push(x);
     const seen = new Set<number>();
     for (const h of u.hops) {
       seen.add(h.ttl);
       let ys = this.#series.get(h.ttl);
       if (!ys) {
-        ys = new Array(this.#xs.length - 1).fill(NaN);
+        ys = new Array(this.#xs.length - 1).fill(null);
         this.#series.set(h.ttl, ys);
       }
-      ys.push(h.currentMs ?? NaN);
+      ys.push(h.currentMs ?? null);
     }
     for (const [ttl, ys] of this.#series) {
-      if (!seen.has(ttl)) ys.push(NaN);
+      if (!seen.has(ttl)) ys.push(null);
     }
-    if (this.#xs.length > RING) {
-      const drop = this.#xs.length - RING;
+    if (this.#xs.length > MAX_POINTS) {
+      const drop = this.#xs.length - MAX_POINTS;
       this.#xs.splice(0, drop);
       for (const ys of this.#series.values()) ys.splice(0, drop);
     }
