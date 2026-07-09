@@ -84,22 +84,25 @@ export class Session {
     this.chartVersion++;
   }
 
-  async start() {
-    if (this.running) return;
-    this.#reset();
-    this.error = null;
-    this.running = true;
-
+  // Apply on arrival. The backend coalesces to ~60Hz and the real rate is
+  // ~1/s, so this is cheap and — unlike a requestAnimationFrame loop — keeps
+  // updating even when the window is backgrounded (rAF pauses when hidden).
+  #makeChannel(): Channel<TraceUpdate> {
     const channel = new Channel<TraceUpdate>();
-    // Apply on arrival. The backend coalesces to ~60Hz and the real rate is
-    // ~1/s, so this is cheap and — unlike a requestAnimationFrame loop — keeps
-    // updating even when the window is backgrounded (rAF pauses when hidden).
     channel.onmessage = (msg) => {
       if (msg.seq !== this.#renderedSeq) {
         this.#renderedSeq = msg.seq;
         this.#apply(msg);
       }
     };
+    return channel;
+  }
+
+  async start() {
+    if (this.running) return;
+    this.#reset();
+    this.error = null;
+    this.running = true;
 
     try {
       this.#sessionId = await invoke<number>("start_session", {
@@ -109,11 +112,36 @@ export class Session {
           intervalMs: this.intervalMs,
           maxHops: 30,
         },
-        channel,
+        channel: this.#makeChannel(),
       });
     } catch (e) {
       this.running = false;
       this.error = `${e}`;
+    }
+  }
+
+  /**
+   * Binds this tab to an already-running backend session and replays its
+   * latest snapshot. Used after a page reload (rebuild tabs from
+   * `list_sessions`) and on restore-from-minimize (idempotent re-subscribe
+   * after the suspend path detached the channel).
+   */
+  async attach(backendId: number) {
+    this.#sessionId = backendId;
+    this.running = true;
+    this.error = null;
+    try {
+      await invoke("attach_session", { id: backendId, channel: this.#makeChannel() });
+    } catch (e) {
+      this.running = false;
+      this.error = `${e}`;
+    }
+  }
+
+  /** Re-subscribes the stream if this tab is bound to a running session. */
+  async reattach() {
+    if (this.running && this.#sessionId !== null) {
+      await this.attach(this.#sessionId);
     }
   }
 

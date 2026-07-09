@@ -45,6 +45,15 @@ export interface EngineInfo {
   available: boolean;
 }
 
+/** A running backend session, as reported by `list_sessions`. */
+export interface SessionInfo {
+  id: number;
+  target: string;
+  ipVersion: IpVersion;
+  intervalMs: number;
+  maxHops: number;
+}
+
 /** A saved target (favourite / recent). */
 export interface Favourite {
   host: string;

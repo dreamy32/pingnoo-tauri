@@ -16,6 +16,13 @@ pub fn handle_window_event<R: tauri::Runtime>(
     match event {
         tauri::WindowEvent::Resized(_) => {
             let minimized = window.is_minimized().unwrap_or(false);
+            if minimized {
+                // Detach the data channels first: engines keep tracing, but no
+                // IPC piles up against a renderer that cannot consume it. The
+                // frontend reattaches on restore (visibilitychange) or reload.
+                use tauri::Manager;
+                window.state::<crate::Sessions>().detach_all();
+            }
             set_suspended(window, minimized);
         }
         tauri::WindowEvent::Focused(true) => set_suspended(window, false),

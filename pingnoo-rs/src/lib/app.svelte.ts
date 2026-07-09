@@ -2,7 +2,7 @@
 // favourites, engine info and the shared GeoIP cache.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { EngineInfo, Favourite, GeoInfo, IpVersion } from "./types";
+import type { EngineInfo, Favourite, GeoInfo, IpVersion, SessionInfo } from "./types";
 import { Session } from "./session.svelte";
 import { settings } from "./settings.svelte";
 import { ensureGeo as ensureGeoLookup } from "./geoip";
@@ -30,6 +30,28 @@ class AppState {
     } catch {
       /* engine list unavailable */
     }
+
+    // Rebuild tabs for sessions that are still tracing in the backend — the
+    // engine outlives the webview (minimize-suspend can even reload the page).
+    try {
+      const running = await invoke<SessionInfo[]>("list_sessions");
+      for (const info of running) {
+        const s = new Session(this.#nextId++, info.target, info.ipVersion, info.intervalMs);
+        this.sessions = [...this.sessions, s];
+        this.activeId = s.id;
+        void s.attach(info.id);
+      }
+    } catch {
+      /* no session restore available */
+    }
+
+    // On restore-from-minimize the suspend path detached all channels;
+    // re-subscribe every bound tab as soon as we're visible again.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        for (const s of this.sessions) void s.reattach();
+      }
+    });
   }
 
   newSession(
