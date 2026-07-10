@@ -1,6 +1,6 @@
 {
   "name": "pingnoo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pingnoo — traceroute + continuous ping analyser (Tauri + Rust + Svelte).",
   "type": "module",
   "scripts": {

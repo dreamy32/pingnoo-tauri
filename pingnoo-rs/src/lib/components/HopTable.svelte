@@ -2,12 +2,14 @@
   import { app } from "../app.svelte";
   import { mask } from "../masking";
   import { flag } from "../geoip";
+  import { settings } from "../settings.svelte";
   import { latencyClass, hopColor, fmtMs } from "../colors";
   import type { Session } from "../session.svelte";
 
   let { session }: { session: Session } = $props();
 
-  // Trigger GeoIP lookups for any hop addresses we haven't seen yet.
+  // Trigger GeoIP lookups for any hop addresses we haven't seen yet
+  // (no-op while masking is enabled — see app.ensureGeo).
   $effect(() => {
     for (const h of session.hops) {
       if (h.addr) app.ensureGeo(h.addr);
@@ -15,7 +17,8 @@
   });
 
   function location(addr: string | null): string {
-    if (!addr) return "";
+    // Locality reveals the route just like the address does — masked together.
+    if (!addr || settings.maskEnabled) return "";
     const g = app.geo[addr];
     if (!g) return "";
     const parts = [g.city, g.country].filter(Boolean);

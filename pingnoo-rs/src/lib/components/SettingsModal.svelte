@@ -4,12 +4,19 @@
   import { detectPublicIp } from "../masking";
 
   let detecting = $state(false);
+  let detectFailed = $state(false);
 
   async function detect() {
     detecting = true;
+    detectFailed = false;
     const ip = await detectPublicIp();
     if (ip) settings.maskPublicIp = ip;
+    else detectFailed = true;
     detecting = false;
+  }
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") app.showSettings = false;
   }
 
   function addRule() {
@@ -19,6 +26,8 @@
     settings.maskRules = settings.maskRules.filter((_, idx) => idx !== i);
   }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <div
   class="overlay"
@@ -36,12 +45,13 @@
       <h3>Latency thresholds</h3>
       <div class="row">
         <label>Warning above <input type="number" min="1" bind:value={settings.warnMs} /> ms</label>
-        <label>Critical above <input type="number" min="1" bind:value={settings.critMs} /> ms</label>
+        <label>Critical above
+          <input type="number" min={settings.warnMs + 1} bind:value={settings.critMs} /> ms</label>
       </div>
       <div class="bands">
         <span class="band good">ideal &lt; {settings.warnMs}</span>
-        <span class="band warn">warning &lt; {settings.critMs}</span>
-        <span class="band bad">critical ≥ {settings.critMs}</span>
+        <span class="band warn">warning &lt; {settings.effectiveCritMs}</span>
+        <span class="band bad">critical ≥ {settings.effectiveCritMs}</span>
       </div>
     </section>
 
@@ -81,7 +91,7 @@
           <input type="text" placeholder="e.g. 203.0.113.5" bind:value={settings.maskPublicIp} />
         </label>
         <button class="detect" onclick={detect} disabled={detecting}>
-          {detecting ? "…" : "Detect"}
+          {detecting ? "…" : detectFailed ? "Failed — retry" : "Detect"}
         </button>
       </div>
 

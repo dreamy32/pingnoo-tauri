@@ -1,12 +1,14 @@
-// One trace session = one tab. Encapsulates its own Channel, ring buffers, rAF
-// render loop and reactive view state, so multiple targets run concurrently and
-// independently (the legacy EditorManager model).
+// One trace session = one tab. Encapsulates its own Channel, chart buffers and
+// reactive view state, so multiple targets run concurrently and independently
+// (the legacy EditorManager model).
 //
-// The hot path is unchanged from the single-session prototype: Channel.onmessage
-// is O(1) (stash latest), and a decoupled rAF loop is the only thing that
-// touches reactive state or the chart — so nothing ever freezes.
+// Updates apply on Channel message arrival: the backend coalesces snapshots to
+// at most ~60/s (really ~1/interval), each apply touches only the values that
+// changed (Svelte 5 fine-grained reactivity), and — unlike a rAF loop — arrival
+// -driven applies keep working while the window is backgrounded.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { settings } from "./settings.svelte";
 import type { Hop, IpVersion, TraceUpdate } from "./types";
 
 /// Hard cap on chart history per hop (~14 h at a 1 s interval). The visible
@@ -58,11 +60,13 @@ export class Session {
   chartVersion = $state(0);
   hidden = $state<Set<number>>(new Set());
   /// Visible chart window in seconds (the "Viewport duration" selector).
-  windowSecs = $state(300);
+  windowSecs = $state(settings.windowSecs);
 
   #renderedSeq = -1;
   #xs: number[] = []; // epoch seconds, stamped on arrival
-  #series = new Map<number, (number | null)[]>(); // null = timeout (loss)
+  // null = timeout (loss); undefined = hop did not exist yet (no data) — the
+  // chart renders both as gaps but only null earns a loss marker.
+  #series = new Map<number, (number | null | undefined)[]>();
   #sessionId: number | null = null;
 
   constructor(id: number, target: string, ipVersion: IpVersion, intervalMs: number) {
@@ -73,7 +77,10 @@ export class Session {
   }
 
   /** Chart data restricted to the trailing `windowSecs` of history. */
-  chartData(windowSecs: number): { xs: number[]; series: { ttl: number; ys: (number | null)[] }[] } {
+  chartData(windowSecs: number): {
+    xs: number[];
+    series: { ttl: number; ys: (number | null | undefined)[] }[];
+  } {
     const n = this.#xs.length;
     if (n === 0) return { xs: [], series: [] };
     // Binary-search the first sample inside the window.
@@ -106,13 +113,12 @@ export class Session {
     this.chartVersion++;
   }
 
-  // Apply on arrival. The backend coalesces to ~60Hz and the real rate is
-  // ~1/s, so this is cheap and — unlike a requestAnimationFrame loop — keeps
-  // updating even when the window is backgrounded (rAF pauses when hidden).
+  // Monotonic-seq guard: replays after a reattach may arrive out of order
+  // relative to live updates — only ever move forward.
   #makeChannel(): Channel<TraceUpdate> {
     const channel = new Channel<TraceUpdate>();
     channel.onmessage = (msg) => {
-      if (msg.seq !== this.#renderedSeq) {
+      if (msg.seq > this.#renderedSeq) {
         this.#renderedSeq = msg.seq;
         this.#apply(msg);
       }
@@ -127,7 +133,7 @@ export class Session {
     this.running = true;
 
     try {
-      this.#sessionId = await invoke<number>("start_session", {
+      const id = await invoke<number>("start_session", {
         args: {
           host: this.target.trim(),
           ipVersion: this.ipVersion,
@@ -136,6 +142,16 @@ export class Session {
         },
         channel: this.#makeChannel(),
       });
+      this.#sessionId = id;
+      // The tab may have been stopped/closed while the invoke was in flight —
+      // don't leak a headless backend session.
+      if (!this.running) {
+        try {
+          await invoke("stop_session", { id });
+        } catch {
+          /* ignore */
+        }
+      }
     } catch (e) {
       this.running = false;
       this.error = `${e}`;
@@ -217,13 +233,17 @@ export class Session {
       seen.add(h.ttl);
       let ys = this.#series.get(h.ttl);
       if (!ys) {
-        ys = new Array(this.#xs.length - 1).fill(null);
+        // Backfill with undefined ("didn't exist yet"), NOT null — a hop that
+        // appears mid-trace must not read as retroactive packet loss.
+        ys = new Array(this.#xs.length - 1).fill(undefined);
         this.#series.set(h.ttl, ys);
       }
       ys.push(h.currentMs ?? null);
     }
-    for (const [ttl, ys] of this.#series) {
-      if (!seen.has(ttl)) ys.push(null);
+    // Hops the backend no longer reports (pruned phantom hops past the
+    // destination) leave the chart entirely, matching the table.
+    for (const ttl of [...this.#series.keys()]) {
+      if (!seen.has(ttl)) this.#series.delete(ttl);
     }
     if (this.#xs.length > MAX_POINTS) {
       const drop = this.#xs.length - MAX_POINTS;

@@ -7,7 +7,7 @@ import { settings } from "./settings.svelte";
 export function latencyClass(ms: number | null | undefined): string {
   if (ms == null) return "lat-none";
   if (ms < settings.warnMs) return "lat-good";
-  if (ms < settings.critMs) return "lat-warn";
+  if (ms < settings.effectiveCritMs) return "lat-warn";
   return "lat-bad";
 }
 

@@ -4,6 +4,7 @@
 
   let newHost = $state("");
   let favOpen = $state(false);
+  let favWrap: HTMLDivElement | undefined = $state();
 
   function openNew(e: Event) {
     e.preventDefault();
@@ -17,25 +18,46 @@
     app.newSession(host, ipVersion, intervalMs);
     favOpen = false;
   }
+
+  function onWindowClick(e: MouseEvent) {
+    if (favOpen && favWrap && !favWrap.contains(e.target as Node)) favOpen = false;
+  }
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") favOpen = false;
+  }
+
+  function onTabKeydown(e: KeyboardEvent, id: number) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      app.setActive(id);
+    }
+  }
 </script>
 
+<svelte:window onclick={onWindowClick} onkeydown={onWindowKeydown} />
+
 <div class="strip">
-  <div class="tabs">
+  <div class="tabs" role="tablist">
     {#each app.sessions as s (s.id)}
-      <button class="tab" class:active={s.id === app.activeId} onclick={() => app.setActive(s.id)}>
+      <div
+        class="tab"
+        class:active={s.id === app.activeId}
+        role="tab"
+        tabindex="0"
+        aria-selected={s.id === app.activeId}
+        onclick={() => app.setActive(s.id)}
+        onkeydown={(e) => onTabKeydown(e, s.id)}>
         <span class="dot" class:live={s.running} class:err={!!s.error}></span>
         <span class="label">{mask(s.target) || "new"}</span>
-        <span
+        <button
           class="close"
-          role="button"
-          tabindex="0"
-          title="close"
+          title="close tab"
+          aria-label="close tab"
           onclick={(e) => {
             e.stopPropagation();
             app.closeSession(s.id);
-          }}
-          onkeydown={() => {}}>✕</span>
-      </button>
+          }}>✕</button>
+      </div>
     {/each}
   </div>
 
@@ -49,7 +71,7 @@
     <button class="add" type="submit" title="add target">＋</button>
   </form>
 
-  <div class="fav-wrap">
+  <div class="fav-wrap" bind:this={favWrap}>
     <button class="fav-btn" title="favourites" onclick={() => (favOpen = !favOpen)}>★</button>
     {#if favOpen}
       <div class="fav-menu">
@@ -125,6 +147,10 @@
     background: var(--danger);
   }
   .close {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    cursor: pointer;
     color: var(--muted);
     font-size: 11px;
     opacity: 0.6;

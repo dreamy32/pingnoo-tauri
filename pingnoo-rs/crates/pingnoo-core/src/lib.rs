@@ -133,8 +133,8 @@ impl StatsAccumulator {
 #[serde(rename_all = "camelCase")]
 pub struct Hop {
     pub ttl: u8,
-    /// Monotonic per-hop sample counter. The UI appends a new chart point only
-    /// when this advances, so coalesced/dropped snapshots never double-plot.
+    /// Monotonic per-hop sample counter (mirrors `stats.sent`). Snapshot-level
+    /// dedup is done by `TraceUpdate.seq`; this is informational per hop.
     pub sample_number: u64,
     pub addr: Option<String>,
     pub host: Option<String>,

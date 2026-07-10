@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from "../app.svelte";
   import { mask } from "../masking";
+  import { settings } from "../settings.svelte";
   import { fmtMs } from "../colors";
   import type { Session } from "../session.svelte";
   import HopTable from "./HopTable.svelte";
@@ -10,17 +11,30 @@
 
   let copied = $state(false);
 
+  // The Windows engine is IPv4-only for now — surface that BEFORE Start.
+  const v6Unsupported = $derived(app.engine?.id === "win-icmp");
+
   function toggleRun() {
     if (session.running) session.stop();
     else session.start();
   }
 
+  function onTargetKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && !session.running) session.start();
+  }
+
+  function onWindowChange() {
+    settings.windowSecs = session.windowSecs;
+  }
+
   function toggleFav() {
-    if (app.isFavourite(session.target)) app.removeFavourite(session.target);
+    const host = session.target.trim();
+    if (!host) return;
+    if (app.isFavourite(host)) app.removeFavourite(host);
     else
       app.addFavourite({
-        host: session.target,
-        name: session.target,
+        host,
+        name: host,
         ipVersion: session.ipVersion,
         intervalMs: session.intervalMs,
       });
@@ -50,16 +64,21 @@
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
-      /* ignore */
+      session.error = "Could not copy to the clipboard.";
     }
   }
 </script>
 
 <div class="control">
   {#if session.running}
-    <span class="target-static">{mask(session.target)}</span>
+    <span class="target-static" title={mask(session.target)}>{mask(session.target)}</span>
   {:else}
-    <input class="target" bind:value={session.target} spellcheck="false" autocomplete="off" />
+    <input
+      class="target"
+      bind:value={session.target}
+      onkeydown={onTargetKeydown}
+      spellcheck="false"
+      autocomplete="off" />
   {/if}
 
   <label class="opt">
@@ -75,7 +94,10 @@
   <div class="seg" class:disabled={session.running}>
     <button class:on={session.ipVersion === "v4"} disabled={session.running}
       onclick={() => (session.ipVersion = "v4")}>IPv4</button>
-    <button class:on={session.ipVersion === "v6"} disabled={session.running}
+    <button
+      class:on={session.ipVersion === "v6"}
+      disabled={session.running || v6Unsupported}
+      title={v6Unsupported ? "IPv6 is not yet supported by the Windows engine" : undefined}
       onclick={() => (session.ipVersion = "v6")}>IPv6</button>
   </div>
 
@@ -115,7 +137,7 @@
       <span class="pt-hint">(hover for details · click a hop row to toggle · red ticks = loss)</span>
       <label class="pt-window">
         show
-        <select bind:value={session.windowSecs}>
+        <select bind:value={session.windowSecs} onchange={onWindowChange}>
           <option value={60}>1 min</option>
           <option value={300}>5 min</option>
           <option value={900}>15 min</option>
@@ -159,6 +181,10 @@
   .target-static {
     color: var(--text);
     font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .opt {
     display: flex;

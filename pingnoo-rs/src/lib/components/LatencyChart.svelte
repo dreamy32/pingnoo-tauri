@@ -52,10 +52,13 @@
             if (!u.series[si].show) continue;
             const ttl = ttlsRef[si - 1];
             const v = u.data[si][idx];
+            // null = timeout; undefined = hop didn't exist yet at this time.
             const val =
-              v == null
+              v === null
                 ? `<span class="lost">timeout</span>`
-                : `${(v as number).toFixed(1)} ms`;
+                : v === undefined
+                  ? `<span class="nodata">—</span>`
+                  : `${(v as number).toFixed(1)} ms`;
             rows.push(
               `<div class="row"><span class="sw" style="background:${hopColor(ttl)}"></span>` +
                 `<span class="h">hop ${ttl}</span><span class="v">${val}</span></div>`,
@@ -80,8 +83,10 @@
     };
   }
 
-  /** Loss markers: a red tick at the bottom for every sample where any visible
-   *  hop timed out — losses are visible at a glance instead of silent gaps. */
+  /** Loss markers: a red tick at the bottom for every sample where a visible,
+   *  otherwise-responsive hop timed out. Hops that have NEVER answered (silent
+   *  routers that don't emit TTL-expired) are excluded — the table's 100% loss
+   *  covers them, and painting a solid red strip would drown real loss events. */
   function lossPlugin(): uPlot.Plugin {
     return {
       hooks: {
@@ -89,13 +94,25 @@
           const ctx = u.ctx;
           const dpr = window.devicePixelRatio || 1;
           const yBot = u.bbox.top + u.bbox.height;
+          const xs = u.data[0];
+          // Consider only series with at least one real sample in view.
+          const responsive: number[] = [];
+          for (let si = 1; si < u.series.length; si++) {
+            if (!u.series[si].show) continue;
+            const ys = u.data[si];
+            for (let ix = 0; ix < ys.length; ix++) {
+              if (typeof ys[ix] === "number") {
+                responsive.push(si);
+                break;
+              }
+            }
+          }
           ctx.save();
           ctx.fillStyle = cssColor("--danger");
-          const xs = u.data[0];
           for (let ix = 0; ix < xs.length; ix++) {
             let lost = false;
-            for (let si = 1; si < u.series.length; si++) {
-              if (u.series[si].show && u.data[si][ix] == null) {
+            for (const si of responsive) {
+              if (u.data[si][ix] === null) {
                 lost = true;
                 break;
               }
@@ -255,5 +272,8 @@
   :global(.pn-tip .lost) {
     color: var(--danger);
     font-weight: 700;
+  }
+  :global(.pn-tip .nodata) {
+    color: var(--muted);
   }
 </style>

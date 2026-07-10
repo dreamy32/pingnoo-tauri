@@ -118,10 +118,17 @@ fn attach_session(
 ) -> Result<SessionInfo, String> {
     let active = sessions.active.lock().unwrap();
     let entry = active.get(&id).ok_or("session is no longer running")?;
-    if let Some(update) = entry.last.lock().unwrap().clone() {
+    // Install first, then replay: no live update can slip through unseen
+    // between the two. The replay may arrive after a newer live update — the
+    // client's monotonic-seq guard discards it in that case.
+    let replay = {
+        let mut slot = entry.channel.lock().unwrap();
+        *slot = Some(channel.clone());
+        entry.last.lock().unwrap().clone()
+    };
+    if let Some(update) = replay {
         let _ = channel.send(update);
     }
-    *entry.channel.lock().unwrap() = Some(channel);
     Ok(entry.info.clone())
 }
 
@@ -181,8 +188,13 @@ async fn start_session(
             if let Some(ch) = attached {
                 if ch.send(latest).is_err() {
                     // Webview gone (suspended renderer, reload, closed window):
-                    // detach and keep tracing.
-                    slot.lock().unwrap().take();
+                    // detach and keep tracing. Identity-checked so a channel
+                    // that attach_session just swapped in is never removed by
+                    // a failure on the OLD channel.
+                    let mut cur = slot.lock().unwrap();
+                    if cur.as_ref().map(|c| c.id()) == Some(ch.id()) {
+                        cur.take();
+                    }
                 }
             }
         }
@@ -204,6 +216,9 @@ async fn start_session(
 #[tauri::command]
 fn stop_session(id: u64, sessions: State<'_, Sessions>) -> Result<(), String> {
     if let Some(entry) = sessions.active.lock().unwrap().remove(&id) {
+        // Detach first so an in-flight round can't deliver one more update to
+        // a tab the user just stopped.
+        entry.channel.lock().unwrap().take();
         entry.cancel.cancel();
     }
     Ok(())

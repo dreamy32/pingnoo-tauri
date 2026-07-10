@@ -87,6 +87,8 @@ class AppState {
   }
 
   ensureGeo(ip: string) {
+    // Privacy: while masking is on, hop IPs are never sent to the geo service.
+    if (settings.maskEnabled) return;
     // Guard against re-lookups: once an IP has a result (even null), never touch
     // `geo` for it again. Without this, an $effect that reads `geo` and calls
     // this would loop forever (every call minted a new `geo` object).
@@ -101,7 +103,15 @@ class AppState {
   #loadFavourites() {
     try {
       const raw = localStorage.getItem(FAV_KEY);
-      if (raw) this.favourites = JSON.parse(raw);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Validate shape so a corrupt store can't crash every render.
+        this.favourites = parsed.filter(
+          (f: unknown): f is Favourite =>
+            !!f && typeof (f as Favourite).host === "string" && (f as Favourite).host.length > 0,
+        );
+      }
     } catch {
       /* ignore */
     }
