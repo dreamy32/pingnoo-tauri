@@ -134,7 +134,7 @@
   <section class="chart-pane">
     <div class="pane-title">
       <span class="pt-label">latency over time</span>
-      <span class="pt-hint">(hover for details · click a hop row to toggle · red ticks = loss)</span>
+      <span class="pt-hint">(hover for details · click row = toggle · right-click row = isolate · red ticks = loss)</span>
       <label class="pt-window">
         show
         <select bind:value={session.windowSecs} onchange={onWindowChange}>

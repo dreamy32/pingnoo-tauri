@@ -113,6 +113,16 @@ export class Session {
     this.chartVersion++;
   }
 
+  /** Right-click isolate (OCCT-style): show ONLY this hop on the chart; a
+   *  second right-click on the already-isolated hop restores all hops. */
+  isolateHop(ttl: number) {
+    const others = this.hops.map((h) => h.ttl).filter((t) => t !== ttl);
+    const alreadyIsolated =
+      !this.hidden.has(ttl) && others.length > 0 && others.every((t) => this.hidden.has(t));
+    this.hidden = alreadyIsolated ? new Set() : new Set(others);
+    this.chartVersion++;
+  }
+
   // Monotonic-seq guard: replays after a reattach may arrive out of order
   // relative to live updates — only ever move forward.
   #makeChannel(): Channel<TraceUpdate> {

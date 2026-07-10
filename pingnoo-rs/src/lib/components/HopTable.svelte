@@ -45,7 +45,14 @@
     <tbody>
       {#each session.hops as hop (hop.ttl)}
         {@const hidden = session.hidden.has(hop.ttl)}
-        <tr class:hidden onclick={() => session.toggleHop(hop.ttl)} title="click to toggle on chart">
+        <tr
+          class:hidden
+          onclick={() => session.toggleHop(hop.ttl)}
+          oncontextmenu={(e) => {
+            e.preventDefault();
+            session.isolateHop(hop.ttl);
+          }}
+          title="click: toggle on chart · right-click: isolate">
           <td class="c-ttl">
             <span class="swatch" style="background:{hopColor(hop.ttl)}"></span>{hop.ttl}
           </td>
